@@ -11,6 +11,8 @@
 
 <script src="https://unpkg.com/@tailwindcss/browser@4.1.11"></script>
 <script src="https://unpkg.com/lucide@0.462.0/dist/umd/lucide.min.js"></script>
+<!-- SheetJS cho tính năng Đọc / Ghi file Excel -->
+<script src="https://cdn.jsdelivr.net/npm/xlsx@0.18.5/dist/xlsx.full.min.js"></script>
 
 <style type="text/tailwindcss">
   @theme {
@@ -72,14 +74,11 @@
                         focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky; }
     .tab-on    { @apply text-sky border-sky; }
 
-    .slotcell  { @apply flex items-center justify-center gap-1 h-9 w-full rounded-ctl border border-line
+    .slotcell  { @apply inline-flex items-center justify-center gap-1 h-9 px-3 rounded-ctl border border-line
                         bg-surface text-[12px] text-inkmute cursor-pointer transition-colors
                         hover:border-sky/50
                         focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky; }
     .slotcell-on { @apply bg-sky/10 border-sky text-sky font-semibold; }
-
-    .sectionhead { @apply row justify-between w-full h-12 px-4 cursor-pointer text-sm font-semibold text-ink
-                          focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky; }
 
     .th        { @apply text-left text-[12px] font-semibold text-inksoft px-3 py-2 border-b border-line whitespace-nowrap; }
     .td        { @apply text-[13px] px-3 py-2.5 border-b border-line align-middle; }
@@ -92,7 +91,7 @@
 <body>
 <div class="mx-auto w-full max-w-[800px] px-4 pb-24 pt-6 sm:pt-10">
 
-  <!-- ============ HEADER ============ -->
+  <!-- HEADER -->
   <header class="row justify-between gap-3 mb-4">
     <div class="stack gap-0.5 min-w-0">
       <h1 class="text-[19px] font-bold tracking-tight leading-tight">Lịch rảnh tập văn nghệ</h1>
@@ -103,31 +102,33 @@
     </button>
   </header>
 
-  <!-- ============ SESSION BAR ============ -->
+  <!-- SESSION BAR -->
   <div id="sessionBar" class="mb-3"></div>
 
-  <!-- ============ WARNING BANNER ============ -->
+  <!-- WARNING BANNER -->
   <div id="warning" aria-live="polite" class="mb-3"></div>
 
-  <!-- ============ TABS ============ -->
+  <!-- TABS -->
   <nav class="row gap-1 border-b border-line mb-5" role="tablist" id="tabs"></nav>
 
-  <!-- ============ VIEW ============ -->
+  <!-- MAIN VIEW -->
   <main id="view" class="stack gap-4"></main>
 
-
+  <footer class="hint mt-10 text-center">
+    Lịch rảnh nhóm — Minimalist Web App
+  </footer>
 </div>
 
-<!-- ============ ADMIN MODAL ============ -->
+<!-- ADMIN MODAL -->
 <div id="adminOverlay" class="hidden fixed inset-0 z-40 bg-ink/20 p-3 sm:p-6 overflow-y-auto">
-  <div id="adminModal" class="card mx-auto w-full max-w-[720px] shadow-lg"
+  <div id="adminModal" class="card mx-auto w-full max-w-[760px] shadow-lg"
        role="dialog" aria-modal="true" aria-labelledby="adminTitle"></div>
 </div>
 
-<!-- ============ TOASTS ============ -->
+<!-- TOASTS -->
 <div id="toasts" aria-live="polite" class="fixed bottom-4 left-1/2 -translate-x-1/2 z-50 stack gap-2 items-center w-[calc(100%-2rem)] max-w-[420px]"></div>
 
-<input type="file" id="importFile" accept="application/json,.json" class="hidden" />
+<input type="file" id="importFile" accept="application/json,.json,.xlsx,.xls" class="hidden" />
 
 <script>
 (function () {
@@ -137,11 +138,23 @@
      CONSTANTS & MESSAGES
      ============================================================ */
   const DAYS = ['Thứ 2', 'Thứ 3', 'Thứ 4', 'Thứ 5', 'Thứ 6', 'Thứ 7', 'Chủ nhật'];
-  const DAYS_SHORT = ['T2', 'T3', 'T4', 'T5', 'T6', 'T7', 'CN'];
   const STORE_PREFIX = 'lichranh:';
   const DEFAULT_PIN = '1412';
   const OTHER = '__other__';
-  const STATE_VERSION = 1;
+  const STATE_VERSION = 3;
+
+  function getDaySlots(di) {
+    if (di >= 0 && di <= 4) { // Thứ 2 -> Thứ 6
+      return [
+        { id: 's_1930_2100', label: '19h30 - 21h00' },
+        { id: 's_2130_2230', label: '21h00 - 22h30' }
+      ];
+    } else { // Thứ 7, Chủ nhật
+      return [
+        { id: 's_1800_1930', label: '18h00 - 19h30' }
+      ];
+    }
+  }
 
   const MSG = {
     saved: 'Đã lưu.',
@@ -150,7 +163,7 @@
     needName: 'Vui lòng nhập họ tên.',
     needOther: 'Vui lòng ghi rõ tên tiết mục khác.',
     needAct: 'Vui lòng chọn ít nhất 1 tiết mục.',
-    needSlot: 'Hãy chọn ít nhất một ca bạn rảnh.',
+    needSlot: 'Hãy chọn ít nhất một khung giờ bạn rảnh.',
     copied: 'Đã copy link nhóm.',
     copyFail: 'Không copy được, hãy copy link thủ công.',
     wrongPin: 'Mã PIN không đúng.',
@@ -160,7 +173,10 @@
     storeFail: 'Không lưu được dữ liệu.',
     importOk: 'Đã nhập dữ liệu nhóm thành công.',
     importFail: 'Tệp JSON không hợp lệ.',
-    autoDone: 'Đã tự động xếp lịch.',
+    importExcelOk: 'Đã nhập dữ liệu Excel thành công.',
+    importExcelFail: 'Tệp Excel không hợp lệ hoặc lỗi đọc file.',
+    exportExcelOk: 'Đã xuất file Excel đăng ký thành công.',
+    autoDone: 'Đã tự động xếp lịch dựa theo ưu tiên.',
     noData: 'Chưa có dữ liệu để xuất.'
   };
 
@@ -202,7 +218,7 @@
   const fmtDateTime = (iso) => {
     if (!iso) return '';
     const d = new Date(iso);
-    return isNaN(d) ? '' : d.toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    return isNaN(d) ? '' : d.toLocaleString('vi-VN', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit', second: '2-digit' });
   };
 
   /* ============================================================
@@ -248,23 +264,15 @@
   /* ============================================================
      STATE & STORE
      ============================================================ */
-  function seedSlots() {
-    return [
-      { id: uid(), label: 'Ca chiều', start: '17:30', end: '19:30', active: true },
-      { id: uid(), label: 'Ca tối', start: '19:30', end: '21:30', active: true }
-    ];
-  }
-
   function blankState(groupId) {
     return {
       version: STATE_VERSION,
       groupId,
       groupName: 'Nhóm ' + groupId,
       pin: DEFAULT_PIN,
-      slots: seedSlots(),
       acts: [
-        { id: uid(), name: 'Tết Đầy Đủ', target: 8, choreographer: 'Nguyễn Văn A' },
-        { id: uid(), name: 'Múa Quạt', target: 6, choreographer: 'Trần Thị B' }
+        { id: uid(), name: 'Tết Đầy Đủ', target: 8, choreographer: 'Nguyễn Văn A', priority: 1, maxSessions: 3, choreoAvailability: {} },
+        { id: uid(), name: 'Múa Quạt', target: 6, choreographer: 'Trần Thị B', priority: 2, maxSessions: 2, choreoAvailability: {} }
       ],
       members: [],
       schedule: {},
@@ -276,22 +284,28 @@
   function migrate(raw, groupId) {
     const base = blankState(groupId);
     if (!raw || typeof raw !== 'object') return base;
-    
-    // Tương thích dữ liệu cũ actId -> actIds
+
     const members = (Array.isArray(raw.members) ? raw.members : []).map(m => {
-      if (!m.actIds) {
-        m.actIds = m.actId ? [m.actId] : [];
-      }
+      if (!m.actIds) m.actIds = m.actId ? [m.actId] : [];
       return m;
     });
+
+    const acts = (Array.isArray(raw.acts) ? raw.acts : base.acts).map((a, idx) => ({
+      id: a.id || uid(),
+      name: a.name || 'Tiết mục',
+      target: Number(a.target) || 1,
+      choreographer: a.choreographer || '',
+      priority: typeof a.priority === 'number' ? a.priority : (idx + 1),
+      maxSessions: typeof a.maxSessions === 'number' ? a.maxSessions : 3,
+      choreoAvailability: a.choreoAvailability && typeof a.choreoAvailability === 'object' ? a.choreoAvailability : {}
+    }));
 
     return {
       version: STATE_VERSION,
       groupId,
       groupName: typeof raw.groupName === 'string' && raw.groupName ? raw.groupName : base.groupName,
       pin: typeof raw.pin === 'string' && raw.pin ? raw.pin : DEFAULT_PIN,
-      slots: Array.isArray(raw.slots) ? raw.slots : base.slots,
-      acts: Array.isArray(raw.acts) ? raw.acts : base.acts,
+      acts: acts,
       members: members,
       schedule: raw.schedule && typeof raw.schedule === 'object' ? raw.schedule : {},
       deadline: typeof raw.deadline === 'string' ? raw.deadline : '',
@@ -318,15 +332,22 @@
   /* ============================================================
      SELECTORS & HELPERS
      ============================================================ */
-  const activeSlots = () => state.slots.filter((s) => s.active);
   const actById = (id) => state.acts.find((a) => a.id === id) || null;
   const cellKey = (day, slotId) => `${day}:${slotId}`;
+
+  function getCellSchedule(key) {
+    const raw = state.schedule[key];
+    if (!raw) return [];
+    if (Array.isArray(raw)) return raw.filter(x => x && x.actId);
+    if (raw.actId) return [{ actId: raw.actId, supervisor: raw.supervisor || '' }];
+    return [];
+  }
 
   const memberActName = (m) => {
     const ids = m.actIds || [];
     if (!ids.length) return 'Chưa rõ';
     const names = ids.map(id => {
-      if (id === OTHER) return m.actOther || 'Khác';
+      if (id === OTHER) return m.actOther ? `Khác (${m.actOther})` : 'Khác';
       const act = actById(id);
       return act ? act.name : 'Đã xoá';
     });
@@ -338,19 +359,44 @@
     return ids.includes(actId);
   }
 
+  function getActMembers(actId) {
+    return state.members.filter(m => isMemberInAct(m, actId));
+  }
+
   function isFree(member, day, slotId) {
     const list = member.availability && member.availability[day];
     return Array.isArray(list) && list.indexOf(slotId) !== -1;
+  }
+
+  // Kiểm tra lịch rảnh của Biên đạo
+  function isChoreoFree(act, day, slotId, strict = false) {
+    if (!act || !act.choreoAvailability) return !strict;
+    let hasAnySlot = false;
+    Object.values(act.choreoAvailability).forEach(arr => {
+      if (Array.isArray(arr) && arr.length > 0) hasAnySlot = true;
+    });
+    if (!hasAnySlot) return !strict; // Nếu chưa cài đặt slot nào -> Mặc định rảnh ngoại trừ chế độ strict check giao diện
+
+    const list = act.choreoAvailability[day];
+    return Array.isArray(list) && list.includes(slotId);
   }
 
   function freeMembers(day, slotId, actId) {
     return state.members.filter((m) => isFree(m, day, slotId) && (!actId || isMemberInAct(m, actId)));
   }
 
+  function checkConflict(actId1, actId2, day, slotId) {
+    if (!actId1 || !actId2 || actId1 === actId2) return null;
+    const f1 = freeMembers(day, slotId, actId1);
+    const f2 = freeMembers(day, slotId, actId2);
+    const overlaps = f1.filter(m1 => f2.some(m2 => m2.id === m1.id));
+    return overlaps.length > 0 ? overlaps : null;
+  }
+
   function membersByAct() {
     const groups = state.acts.map((a) => ({ key: a.id, name: a.name, act: a, list: [] }));
     const other = { key: OTHER, name: 'Khác / chưa xác định', act: null, list: [] };
-    
+
     state.members.forEach((m) => {
       const ids = m.actIds || [];
       let assigned = false;
@@ -361,7 +407,7 @@
       });
       if (!assigned) other.list.push(m);
     });
-    
+
     if (other.list.length) groups.push(other);
     return groups;
   }
@@ -382,7 +428,7 @@
       id: idx >= 0 ? state.members[idx].id : uid(),
       name: draft.name.trim().replace(/\s+/g, ' '),
       actIds: Array.isArray(draft.actIds) ? draft.actIds : [],
-      actOther: draft.actIds.includes(OTHER) ? draft.actOther.trim() : '',
+      actOther: draft.actIds.includes(OTHER) ? (draft.actOther || '').trim() : '',
       apprentice: !!draft.apprentice,
       availability: draft.availability,
       updatedAt: Date.now()
@@ -392,33 +438,100 @@
     return idx >= 0;
   }
 
+  // TỰ ĐỘNG XẾP LỊCH CÓ NÂNG CẤP: ƯU TIÊN TIẾT MỤC, CÀI ĐẶT SỐ CA VÀ LỊCH BIÊN ĐẠO
   function autoSchedule(overwrite) {
     if (!state.acts.length) { toast('Hãy tạo tiết mục trước khi xếp lịch.', 'warn'); return; }
-    const slots = activeSlots();
     const loadCount = {};
     state.acts.forEach((a) => { loadCount[a.id] = 0; });
+
     if (!overwrite) {
-      Object.values(state.schedule).forEach((v) => { if (v && loadCount[v.actId] != null) loadCount[v.actId]++; });
+      Object.values(state.schedule).forEach((items) => {
+        const list = Array.isArray(items) ? items : [items];
+        list.forEach(v => { if (v && v.actId && loadCount[v.actId] != null) loadCount[v.actId]++; });
+      });
     } else {
       state.schedule = {};
     }
 
+    // Sắp xếp các tiết mục theo độ ưu tiên (Priority số nhỏ hơn xếp trước)
+    const sortedActs = [...state.acts].sort((a, b) => (a.priority || 99) - (b.priority || 99));
+
     DAYS.forEach((_, day) => {
+      const slots = getDaySlots(day);
       slots.forEach((slot) => {
         const key = cellKey(day, slot.id);
-        if (!overwrite && state.schedule[key] && state.schedule[key].actId) return;
-        let best = null;
-        state.acts.forEach((act, order) => {
-          const free = freeMembers(day, slot.id, act.id).length;
-          if (!free) return;
-          const cand = { act, score: free / Math.max(1, Number(act.target) || 0), load: loadCount[act.id], order };
-          if (!best || cand.score > best.score ||
-             (cand.score === best.score && cand.load < best.load) ||
-             (cand.score === best.score && cand.load === best.load && cand.order < best.order)) best = cand;
-        });
-        if (best) {
-          state.schedule[key] = { actId: best.act.id, supervisor: best.act.choreographer || '' };
-          loadCount[best.act.id]++;
+        let existing = overwrite ? [] : getCellSchedule(key);
+
+        // Đợt 1: Xếp tiết mục chính trong khung giờ
+        if (existing.length === 0) {
+          let best1 = null;
+          sortedActs.forEach((act, order) => {
+            // 1. Kiểm tra giới hạn số ca tập đã đặt cho tiết mục
+            const maxS = act.maxSessions != null ? Number(act.maxSessions) : 99;
+            if (loadCount[act.id] >= maxS) return;
+
+            // 2. Số lượng thành viên rảnh
+            const free = freeMembers(day, slot.id, act.id).length;
+            if (!free) return;
+
+            // 3. Ưu tiên Lịch Biên Đạo (+100 điểm nếu Biên Đạo rảnh)
+            const choreoOK = isChoreoFree(act, day, slot.id);
+            const choreoScore = choreoOK ? 100 : 0;
+
+            // 4. Ưu tiên Tiết mục (Độ ưu tiên càng thấp/cao hơn điểm càng nhiều)
+            const priorityScore = (100 - (act.priority || 1) * 10);
+
+            // Tổng điểm xếp lịch
+            const score = (free / Math.max(1, Number(act.target) || 0)) * 10 + choreoScore + priorityScore;
+
+            const cand = { act, score, load: loadCount[act.id], order };
+            if (!best1 || cand.score > best1.score ||
+               (cand.score === best1.score && cand.load < best1.load)) best1 = cand;
+          });
+          if (best1) {
+            existing.push({ actId: best1.act.id, supervisor: best1.act.choreographer || '' });
+            loadCount[best1.act.id]++;
+          }
+        }
+
+        // Đợt 2: Xếp tiết mục ghép thứ 2 (nếu không đụng nhân sự)
+        if (existing.length === 1) {
+          const firstActId = existing[0].actId;
+          let best2 = null;
+          sortedActs.forEach((act, order) => {
+            if (act.id === firstActId) return;
+
+            // 1. Kiểm tra giới hạn số ca tập
+            const maxS = act.maxSessions != null ? Number(act.maxSessions) : 99;
+            if (loadCount[act.id] >= maxS) return;
+
+            // 2. Kiểm tra xung đột trùng người với tiết mục 1
+            if (checkConflict(firstActId, act.id, day, slot.id)) return;
+
+            const free = freeMembers(day, slot.id, act.id).length;
+            if (!free) return;
+
+            // 3. Ưu tiên Lịch Biên đạo
+            const choreoOK = isChoreoFree(act, day, slot.id);
+            const choreoScore = choreoOK ? 100 : 0;
+
+            // 4. Ưu tiên Tiết mục
+            const priorityScore = (100 - (act.priority || 1) * 10);
+
+            const score = (free / Math.max(1, Number(act.target) || 0)) * 10 + choreoScore + priorityScore;
+
+            const cand = { act, score, load: loadCount[act.id], order };
+            if (!best2 || cand.score > best2.score ||
+               (cand.score === best2.score && cand.load < best2.load)) best2 = cand;
+          });
+          if (best2) {
+            existing.push({ actId: best2.act.id, supervisor: best2.act.choreographer || '' });
+            loadCount[best2.act.id]++;
+          }
+        }
+
+        if (existing.length) {
+          state.schedule[key] = existing;
         } else if (overwrite) {
           delete state.schedule[key];
         }
@@ -428,22 +541,170 @@
     toast(MSG.autoDone);
   }
 
-  function exportCSV() {
-    const slots = activeSlots();
-    if (!slots.length) { toast(MSG.noData, 'warn'); return; }
-    const q = (v) => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
-    const rows = [['Ngày', 'Ca', 'Giờ', 'Tiết mục', 'Người phụ trách', 'Số bạn rảnh', 'Chỉ tiêu']];
-    DAYS.forEach((dayName, day) => {
-      slots.forEach((slot) => {
-        const cell = state.schedule[cellKey(day, slot.id)] || {};
-        const act = cell.actId ? actById(cell.actId) : null;
-        rows.push([
-          dayName, slot.label, `${slot.start}-${slot.end}`,
-          act ? act.name : '', cell.supervisor || '',
-          act ? freeMembers(day, slot.id, act.id).length : freeMembers(day, slot.id).length,
-          act ? (act.target || '') : ''
-        ]);
+  /* ============================================================
+     EXCEL EXPORT / IMPORT
+     ============================================================ */
+  function exportExcel() {
+    if (typeof XLSX === 'undefined') {
+      toast('Chưa tải xong thư viện Excel, vui lòng thử lại sau vài giây.', 'danger');
+      return;
+    }
+    if (!state.members.length && !state.acts.length) {
+      toast(MSG.noData, 'warn');
+      return;
+    }
+
+    const wb = XLSX.utils.book_new();
+
+    const memberHeaders = [
+      'Dấu thời gian',
+      'Họ và Tên của bạn',
+      'Vote những ngày bạn có thể vào tập được',
+      'Tiết mục của bạn'
+    ];
+
+    const memberRows = [memberHeaders];
+
+    state.members.forEach((m) => {
+      const freeSlotsTextList = [];
+      DAYS.forEach((dayName, di) => {
+        const slots = getDaySlots(di);
+        slots.forEach(s => {
+          if (isFree(m, di, s.id)) {
+            freeSlotsTextList.push(`${dayName} (${s.label})`);
+          }
+        });
       });
+
+      const freeSummary = freeSlotsTextList.length ? freeSlotsTextList.join(', ') : 'Bận cả tuần';
+
+      memberRows.push([
+        fmtDateTime(m.updatedAt || Date.now()),
+        m.name,
+        freeSummary,
+        memberActName(m)
+      ]);
+    });
+
+    const wsMembers = XLSX.utils.aoa_to_sheet(memberRows);
+    XLSX.utils.book_append_sheet(wb, wsMembers, 'Danh sách Đăng ký');
+
+    const schedRows = [['Ngày', 'Khung giờ', 'Tiết mục', 'Người phụ trách', 'Số bạn rảnh', 'Chỉ tiêu']];
+    DAYS.forEach((dayName, di) => {
+      const slots = getDaySlots(di);
+      slots.forEach((slot) => {
+        const items = getCellSchedule(cellKey(di, slot.id));
+        if (!items.length) {
+          schedRows.push([dayName, slot.label, 'Chưa có lịch', '', '', '']);
+        } else {
+          items.forEach(item => {
+            const act = item.actId ? actById(item.actId) : null;
+            schedRows.push([
+              dayName,
+              slot.label,
+              act ? act.name : '',
+              item.supervisor || '',
+              act ? freeMembers(di, slot.id, act.id).length : freeMembers(di, slot.id).length,
+              act ? (act.target || '') : ''
+            ]);
+          });
+        }
+      });
+    });
+    const wsSched = XLSX.utils.aoa_to_sheet(schedRows);
+    XLSX.utils.book_append_sheet(wb, wsSched, 'Lịch tập chung');
+
+    XLSX.writeFile(wb, `danh-sach-dang-ky-${state.groupId}.xlsx`);
+    toast(MSG.exportExcelOk);
+  }
+
+  function importExcel(file) {
+    if (typeof XLSX === 'undefined') {
+      toast('Chưa tải xong thư viện Excel.', 'danger');
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = (e) => {
+      try {
+        const data = new Uint8Array(e.target.result);
+        const workbook = XLSX.read(data, { type: 'array' });
+
+        let importedMembers = 0;
+
+        const sheetName = workbook.SheetNames[0];
+        if (sheetName) {
+          const sheet = workbook.Sheets[sheetName];
+          const json = XLSX.utils.sheet_to_json(sheet);
+
+          json.forEach(row => {
+            const name = row['Họ và Tên của bạn'] || row['Họ và Tên'] || row['Họ tên'] || row['Tên'] || row['Name'];
+            if (!name) return;
+
+            const actStr = String(row['Tiết mục của bạn'] || row['Tiết mục đăng ký'] || row['Tiết mục'] || '');
+            const actIds = [];
+            state.acts.forEach(a => {
+              if (actStr.toLowerCase().includes(a.name.toLowerCase())) {
+                actIds.push(a.id);
+              }
+            });
+            if (!actIds.length && actStr) {
+              actIds.push(OTHER);
+            }
+
+            const voteStr = String(row['Vote những ngày bạn có thể vào tập được'] || row['Ngày rảnh'] || '');
+            const availability = {};
+            DAYS.forEach((_, di) => { availability[di] = []; });
+
+            DAYS.forEach((dayName, di) => {
+              const slots = getDaySlots(di);
+              slots.forEach(s => {
+                const searchPattern = `${dayName} (${s.label})`;
+                if (voteStr.includes(searchPattern) || (voteStr.includes(dayName) && voteStr.includes(s.label))) {
+                  availability[di].push(s.id);
+                }
+              });
+            });
+
+            const draftItem = {
+              name: String(name).trim(),
+              actIds: actIds.length ? actIds : (state.acts[0] ? [state.acts[0].id] : []),
+              actOther: actIds.includes(OTHER) ? actStr : '',
+              apprentice: false,
+              availability
+            };
+
+            upsertMember(draftItem);
+            importedMembers++;
+          });
+        }
+
+        save();
+        renderAll();
+        toast(`Đã nhập thành công ${importedMembers} thành viên từ Excel.`);
+      } catch (err) {
+        console.error(err);
+        toast(MSG.importExcelFail, 'danger');
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  }
+
+  function exportCSV() {
+    const q = (v) => `"${String(v == null ? '' : v).replace(/"/g, '""')}"`;
+    const rows = [['Dấu thời gian', 'Họ và Tên của bạn', 'Vote những ngày bạn có thể vào tập được', 'Tiết mục của bạn']];
+    state.members.forEach((m) => {
+      const freeSlotsTextList = [];
+      DAYS.forEach((dayName, di) => {
+        getDaySlots(di).forEach(s => {
+          if (isFree(m, di, s.id)) freeSlotsTextList.push(`${dayName} (${s.label})`);
+        });
+      });
+      rows.push([
+        fmtDateTime(m.updatedAt || Date.now()),
+        m.name,
+        freeSlotsTextList.join(', '),
+        memberActName(m)
+      ]);
     });
     const csv = '\uFEFF' + rows.map((r) => r.map(q).join(',')).join('\r\n');
     downloadBlob(`lich-tap-${state.groupId}.csv`, 'text/csv;charset=utf-8', csv);
@@ -482,7 +743,7 @@
   /* ============================================================
      UI STATE & DRAFT
      ============================================================ */
-  const ui = { tab: 'register', adminOpen: false, adminAuthed: false, adminSection: 'slots', pinVisible: false };
+  const ui = { tab: 'register', adminOpen: false, adminAuthed: false, adminSection: 'acts', pinVisible: false };
 
   function blankDraft() {
     const availability = {};
@@ -502,6 +763,8 @@
         <span class="grow"></span>
         <button class="btn btn-sm" data-action="copy-link">${icon('link')} Copy link</button>
         <button class="btn btn-sm" data-action="new-group">${icon('plus')} Nhóm mới</button>
+        <button class="btn btn-sm btn-primary" data-action="export-excel">${icon('file-spreadsheet')} Xuất Excel</button>
+        <button class="btn btn-sm" data-action="import-excel">${icon('upload')} Nhập Excel / JSON</button>
       </div>`;
   }
 
@@ -545,31 +808,37 @@
   }
 
   function gridHTML() {
-    const slots = activeSlots();
-    if (!slots.length) {
-      return `<div class="card border-dashed p-6 text-center">
-        <p class="text-[13px] font-medium text-inksoft mb-1">Chưa có ca tập nào</p>
-        <p class="hint">Quản trị viên cần mở ca tập trong phần Quản trị trước khi thành viên đăng ký.</p>
-      </div>`;
-    }
-    const head = `<div class="grid gap-1.5 overflow-x-auto pb-2" style="grid-template-columns: 50px repeat(${slots.length}, minmax(110px, 1fr))">
-      <div></div>
-      ${slots.map((s) => `<div class="stack items-center justify-end pb-1">
-        <span class="text-[12px] font-semibold text-ink text-center leading-tight">${esc(s.label)}</span>
-        <span class="text-[11px] text-inkmute">${esc(s.start)}–${esc(s.end)}</span>
-      </div>`).join('')}
-      ${DAYS.map((day, di) => `
-        <div class="row text-[12px] font-medium text-inksoft h-9">${esc(DAYS_SHORT[di])}</div>
-        ${slots.map((s) => {
-          const on = draft.availability[di] && draft.availability[di].indexOf(s.id) !== -1;
-          return `<button type="button" class="slotcell ${on ? 'slotcell-on' : ''}"
-            aria-pressed="${on}" data-action="toggle-slot" data-day="${di}" data-slot="${s.id}">
-            ${on ? icon('check', 'w-3.5 h-3.5') + ' Rảnh' : '—'}
-          </button>`;
-        }).join('')}`).join('')}
-    </div>`;
-    const count = Object.values(draft.availability).reduce((n, a) => n + a.length, 0);
-    return head + `<p class="hint mt-2.5">Đã chọn <span class="font-semibold text-ink">${count}</span> ca rảnh.</p>`;
+    let html = `<div class="grid gap-3 sm:grid-cols-2">`;
+    DAYS.forEach((dayName, di) => {
+      const slots = getDaySlots(di);
+      html += `
+        <div class="card p-3 stack gap-2 bg-canvas/40">
+          <span class="text-[13px] font-semibold text-ink">${esc(dayName)}</span>
+          <div class="flex flex-wrap gap-2">
+            ${slots.map(s => {
+              const on = isFree(draft, di, s.id);
+              return `
+                <button type="button" class="slotcell ${on ? 'slotcell-on' : ''}"
+                  aria-pressed="${on}" data-action="toggle-slot" data-day="${di}" data-slot="${s.id}">
+                  ${on ? icon('check', 'w-3.5 h-3.5 text-sky') : ''} ${esc(s.label)}
+                </button>
+              `;
+            }).join('')}
+          </div>
+        </div>
+      `;
+    });
+    html += `</div>`;
+
+    let count = 0;
+    DAYS.forEach((_, di) => {
+      getDaySlots(di).forEach(s => {
+        if (isFree(draft, di, s.id)) count++;
+      });
+    });
+
+    html += `<p class="hint mt-2.5">Đã chọn <span class="font-semibold text-ink">${count}</span> khung giờ rảnh.</p>`;
+    return html;
   }
 
   function renderGrid() {
@@ -588,11 +857,11 @@
 
       <div class="grid gap-4 sm:grid-cols-2">
         <div>
-          <label class="label" for="fName">Họ và tên <span class="text-danger">*</span></label>
+          <label class="label" for="fName">Họ và Tên của bạn <span class="text-danger">*</span></label>
           <input class="input" id="fName" name="name" autocomplete="name" placeholder="Ví dụ: Nguyễn Văn A" value="${esc(draft.name)}" />
         </div>
         <div>
-          <label class="label">Tiết mục tham gia <span class="hint font-normal">(Có thể chọn nhiều)</span></label>
+          <label class="label">Tiết mục của bạn <span class="hint font-normal">(Có thể chọn nhiều)</span></label>
           <div class="stack gap-2 p-3 border border-line rounded-ctl bg-surface max-h-44 overflow-y-auto">
             ${state.acts.map((a) => `
               <label class="flex items-center gap-2 cursor-pointer select-none text-sm">
@@ -616,14 +885,14 @@
       <label class="flex items-start gap-2.5 cursor-pointer select-none">
         <input type="checkbox" id="fApprentice" class="w-4 h-4 mt-0.5 accent-sky rounded-ctl" ${draft.apprentice ? 'checked' : ''} />
         <span class="stack">
-          <span class="text-[13px] font-medium">Đăng ký làm Tập Sự </span>
-          <span class="hint">Đánh dấu nếu bạn muốn thử sức.</span>
+          <span class="text-[13px] font-medium">Đăng ký làm thành viên Tập Sự / Học Việc</span>
+          <span class="hint">Đánh dấu nếu bạn mới tham gia nhóm hoặc đang trong thời gian thử sức.</span>
         </span>
       </label>
 
       <div class="stack gap-2.5 pt-1 border-t border-line">
         <div class="row justify-between gap-2 pt-2">
-          <span class="text-[13px] font-semibold">Chọn các ca bạn RẢNH trong tuần</span>
+          <span class="text-[13px] font-semibold">Vote những ngày bạn có thể vào tập được</span>
           <button type="button" class="btn btn-sm" data-action="clear-grid">${icon('eraser')} Bỏ chọn hết</button>
         </div>
         <div id="gridBox">${gridHTML()}</div>
@@ -645,7 +914,10 @@
     const sorted = state.members.slice().sort((a, b) => a.name.localeCompare(b.name, 'vi'));
     return `
     <div class="card p-5 stack gap-3">
-      <h2 class="text-base font-semibold">Thành viên đã nộp lịch (${sorted.length})</h2>
+      <div class="row justify-between gap-2 flex-wrap">
+        <h2 class="text-base font-semibold">Thành viên đã nộp lịch (${sorted.length})</h2>
+        <button class="btn btn-sm btn-primary" data-action="export-excel">${icon('file-spreadsheet')} Xuất Excel Đăng ký</button>
+      </div>
       <div class="flex flex-wrap gap-1.5">
         ${sorted.map((m) => `<span class="badge ${m.apprentice ? 'badge-app' : 'badge-ok'}" title="${esc(memberActName(m))}">
           ${esc(m.name)}</span>`).join('')}
@@ -654,30 +926,42 @@
   }
 
   function scheduleHTML() {
-    const slots = activeSlots();
-    if (!slots.length) return `<div class="card border-dashed p-6 text-center hint">Chưa có ca tập nào được thiết lập.</div>`;
     return `
     <div class="card p-5 stack gap-4">
       <div class="row justify-between gap-2">
         <h2 class="text-base font-semibold">Lịch tập được xếp trong tuần</h2>
-        <button class="btn btn-sm" data-action="export-csv">${icon('file-down')} Xuất File CSV</button>
+        <div class="row gap-2">
+          <button class="btn btn-sm btn-primary" data-action="export-excel">${icon('file-spreadsheet')} Xuất Excel</button>
+          <button class="btn btn-sm" data-action="export-csv">${icon('file-down')} Xuất CSV</button>
+        </div>
       </div>
       <div class="stack gap-3">
         ${DAYS.map((day, di) => {
+          const slots = getDaySlots(di);
           const cells = slots.map((s) => {
-            const cell = state.schedule[cellKey(di, s.id)] || {};
-            const act = cell.actId ? actById(cell.actId) : null;
-            const free = act ? freeMembers(di, s.id, act.id).length : 0;
-            return `<div class="card ${act ? 'border-sky/40 bg-sky/5' : 'border-dashed'} p-3 stack gap-1">
-              <span class="text-[11px] text-inkmute font-medium">${esc(s.label)} · ${esc(s.start)}–${esc(s.end)}</span>
-              ${act ? `<span class="text-[13px] font-semibold text-ink">${esc(act.name)}</span>
-                <span class="hint">${cell.supervisor ? 'Phụ trách: ' + esc(cell.supervisor) + ' · ' : ''}${free}/${esc(act.target || '–')} bạn rảnh</span>`
-              : `<span class="text-[13px] text-inkmute">Không có lịch tập</span>`}
+            const items = getCellSchedule(cellKey(di, s.id));
+            const conflict = items.length === 2 && checkConflict(items[0].actId, items[1].actId, di, s.id);
+            return `<div class="card ${items.length ? (conflict ? 'border-danger/60 bg-danger/5' : 'border-sky/40 bg-sky/5') : 'border-dashed'} p-3 stack gap-2">
+              <div class="row justify-between items-center">
+                <span class="text-[11px] text-inkmute font-medium">${esc(s.label)}</span>
+                ${conflict ? `<span class="badge bg-danger/10 text-danger text-[9px]">⚠️ Đụng nhân sự</span>` : ''}
+              </div>
+              ${items.length ? items.map((item, idx) => {
+                const act = actById(item.actId);
+                if (!act) return '';
+                const free = freeMembers(di, s.id, act.id).length;
+                return `
+                <div class="${idx > 0 ? 'border-t border-line/60 pt-2' : ''} stack gap-0.5">
+                  <span class="text-[13px] font-semibold text-ink">${esc(act.name)}</span>
+                  <span class="hint">${item.supervisor ? 'Phụ trách: ' + esc(item.supervisor) + ' · ' : ''}<strong class="text-ink font-semibold">${free}</strong>/${esc(act.target || '–')} bạn rảnh</span>
+                </div>`;
+              }).join('')
+              : `<span class="text-[13px] text-inkmute">Chưa xếp lịch</span>`}
             </div>`;
           }).join('');
           return `<div class="stack gap-1.5">
             <span class="text-[12px] font-semibold text-inksoft">${esc(day)}</span>
-            <div class="grid gap-2" style="grid-template-columns: repeat(auto-fit, minmax(180px, 1fr))">${cells}</div>
+            <div class="grid gap-2" style="grid-template-columns: repeat(auto-fit, minmax(200px, 1fr))">${cells}</div>
           </div>`;
         }).join('')}
       </div>
@@ -733,7 +1017,7 @@
         <div>
           <label class="label" for="pinInp">Nhập mã PIN Quản trị</label>
           <div class="relative">
-            <input class="input pr-10" id="pinInp" type="${ui.pinVisible ? 'text' : 'password'}" />
+            <input class="input pr-10" id="pinInp" type="${ui.pinVisible ? 'text' : 'password'}" required />
             <button type="button" class="absolute right-2 top-1.5 btn btn-sm btn-icon border-0" data-action="toggle-pin-vis">
               ${icon(ui.pinVisible ? 'eye-off' : 'eye')}
             </button>
@@ -756,19 +1040,15 @@
         <button class="btn btn-sm btn-icon" data-action="close-admin" aria-label="Đóng">${icon('x')}</button>
       </div>
 
-      <!-- Navigation Tabs trong Admin -->
       <div class="row gap-1 border-b border-line overflow-x-auto pb-1">
-        <button class="btn btn-sm ${sec === 'slots' ? 'btn-primary' : ''}" data-action="admin-sec" data-sec="slots">Ca tập</button>
-        <button class="btn btn-sm ${sec === 'acts' ? 'btn-primary' : ''}" data-action="admin-sec" data-sec="acts">Tiết mục</button>
-        <button class="btn btn-sm ${sec === 'builder' ? 'btn-primary' : ''}" data-action="admin-sec" data-sec="builder">Xếp lịch</button>
+        <button class="btn btn-sm ${sec === 'acts' ? 'btn-primary' : ''}" data-action="admin-sec" data-sec="acts">Tiết mục & Lịch Biên đạo</button>
+        <button class="btn btn-sm ${sec === 'builder' ? 'btn-primary' : ''}" data-action="admin-sec" data-sec="builder">Phân chia Lịch tập</button>
         <button class="btn btn-sm ${sec === 'roster' ? 'btn-primary' : ''}" data-action="admin-sec" data-sec="roster">Thành viên</button>
         <button class="btn btn-sm ${sec === 'settings' ? 'btn-primary' : ''}" data-action="admin-sec" data-sec="settings">Cài đặt & Hạn</button>
       </div>
 
-      <!-- Content theo Tab -->
       <div class="stack gap-4">
-        ${sec === 'slots' ? adminSlotsHTML()
-        : sec === 'acts' ? adminActsHTML()
+        ${sec === 'acts' ? adminActsHTML()
         : sec === 'builder' ? adminBuilderHTML()
         : sec === 'roster' ? rosterHTML(true)
         : adminSettingsHTML()}
@@ -776,56 +1056,85 @@
     </div>`;
   }
 
-  function adminSlotsHTML() {
-    return `
-    <div class="stack gap-3">
-      <h3 class="text-sm font-semibold">Danh sách ca tập</h3>
-      <div class="stack gap-2">
-        ${state.slots.map((s) => `
-          <div class="row justify-between gap-2 p-3 border border-line rounded-ctl">
-            <div class="stack">
-              <span class="text-sm font-medium">${esc(s.label)} (${esc(s.start)} - ${esc(s.end)})</span>
-              <span class="hint">${s.active ? 'Đang hoạt động' : 'Tạm ẩn'}</span>
-            </div>
-            <button class="btn btn-sm btn-danger btn-icon" data-action="del-slot" data-id="${s.id}">${icon('trash-2')}</button>
-          </div>
-        `).join('')}
-      </div>
-
-      <form id="slotForm" class="stack gap-3 pt-3 border-t border-line">
-        <h4 class="text-xs font-semibold uppercase text-inksoft">Thêm ca tập mới</h4>
-        <div class="grid gap-2 sm:grid-cols-3">
-          <input class="input" id="sLabel" placeholder="Tên ca (VD: Ca sáng)" required />
-          <input class="input" id="sStart" type="time" value="08:00" required />
-          <input class="input" id="sEnd" type="time" value="10:00" required />
-        </div>
-        <button type="submit" class="btn btn-primary self-start">${icon('plus')} Thêm ca tập</button>
-      </form>
-    </div>`;
-  }
-
   function adminActsHTML() {
     return `
     <div class="stack gap-3">
-      <h3 class="text-sm font-semibold">Danh sách Tiết mục</h3>
+      <h3 class="text-sm font-semibold">Danh sách Tiết mục, Độ ưu tiên & Lịch Biên đạo</h3>
       <div class="stack gap-2">
-        ${state.acts.map((a) => `
-          <div class="row justify-between gap-2 p-3 border border-line rounded-ctl">
-            <div class="stack">
-              <span class="text-sm font-medium">${esc(a.name)}</span>
-              <span class="hint">Chỉ tiêu: ${a.target || 0} người · Biên đạo: ${esc(a.choreographer || 'Chưa có')}</span>
+        ${state.acts.map((a) => {
+          const registered = getActMembers(a.id);
+          return `
+          <div class="p-3 border border-line rounded-ctl stack gap-2 bg-surface">
+            <div class="row justify-between gap-2">
+              <div class="stack">
+                <div class="row gap-2 items-center">
+                  <span class="badge badge-neutral">Độ ưu tiên: ${a.priority || 1}</span>
+                  <span class="text-sm font-semibold text-ink">${esc(a.name)}</span>
+                </div>
+                <span class="hint">Chỉ tiêu: ${a.target || 0} người · Biên đạo: ${esc(a.choreographer || 'Chưa có')} · Ca tập cần xếp: <strong class="text-sky">${a.maxSessions || 3} ca/tuần</strong></span>
+              </div>
+              <button class="btn btn-sm btn-danger btn-icon" data-action="del-act" data-id="${a.id}">${icon('trash-2')}</button>
             </div>
-            <button class="btn btn-sm btn-danger btn-icon" data-action="del-act" data-id="${a.id}">${icon('trash-2')}</button>
-          </div>
-        `).join('')}
+
+            <!-- Cài đặt lịch rảnh cho Biên đạo -->
+            <details class="mt-1 text-xs border border-line/80 rounded-ctl p-2 bg-canvas/40">
+              <summary class="cursor-pointer font-medium text-sky hover:underline flex items-center gap-1 select-none">
+                ${icon('calendar')} Cài đặt khung giờ rảnh của Biên đạo (${esc(a.choreographer || 'Biên đạo')})
+              </summary>
+              <p class="hint my-1 mt-2 text-[11px]">Chọn các ca Biên đạo rảnh để hệ thống tự động ưu tiên xếp lịch. Nếu không chọn ca nào, hệ thống xem như Biên đạo rảnh tất cả các ca.</p>
+              <div class="grid gap-2 sm:grid-cols-2 mt-2">
+                ${DAYS.map((dayName, di) => `
+                  <div class="stack gap-1 p-1.5 bg-surface rounded border border-line">
+                    <span class="font-semibold text-[11px] text-inksoft">${dayName}</span>
+                    <div class="flex flex-wrap gap-1">
+                      ${getDaySlots(di).map(s => {
+                        const checked = isChoreoFree(a, di, s.id, true);
+                        return `
+                          <button type="button" class="slotcell ${checked ? 'slotcell-on' : ''} text-[11px] py-1 h-7 px-2"
+                            data-action="toggle-choreo-slot" data-actid="${a.id}" data-day="${di}" data-slot="${s.id}">
+                            ${checked ? icon('check', 'w-3 h-3 text-sky') : ''} ${s.label}
+                          </button>
+                        `;
+                      }).join('')}
+                    </div>
+                  </div>
+                `).join('')}
+              </div>
+            </details>
+
+            <div class="pt-2 border-t border-line/60 stack gap-1">
+              <span class="text-[12px] font-medium text-inksoft">Thành viên đã chọn tiết mục này (${registered.length}):</span>
+              <div class="flex flex-wrap gap-1">
+                ${registered.length ? registered.map(m => `<span class="badge ${m.apprentice ? 'badge-app' : 'badge-ok'}">${esc(m.name)}</span>`).join('') : '<span class="hint italic">Chưa có ai đăng ký</span>'}
+              </div>
+            </div>
+          </div>`;
+        }).join('')}
       </div>
 
       <form id="actForm" class="stack gap-3 pt-3 border-t border-line">
         <h4 class="text-xs font-semibold uppercase text-inksoft">Thêm tiết mục mới</h4>
-        <div class="grid gap-2 sm:grid-cols-3">
-          <input class="input" id="aName" placeholder="Tên tiết mục" required />
-          <input class="input" id="aTarget" type="number" min="1" placeholder="Số lượng người" required />
-          <input class="input" id="aChoreo" placeholder="Tên biên đạo" />
+        <div class="grid gap-2 sm:grid-cols-2">
+          <div>
+            <label class="label">Tên tiết mục <span class="text-danger">*</span></label>
+            <input class="input" id="aName" placeholder="Tên tiết mục" required />
+          </div>
+          <div>
+            <label class="label">Tên Biên đạo</label>
+            <input class="input" id="aChoreo" placeholder="Tên biên đạo" />
+          </div>
+          <div>
+            <label class="label">Số lượng thành viên chỉ tiêu</label>
+            <input class="input" id="aTarget" type="number" min="1" value="8" required />
+          </div>
+          <div>
+            <label class="label">Độ ưu tiên xếp lịch (1 = Ưu tiên cao nhất)</label>
+            <input class="input" id="aPriority" type="number" min="1" value="1" required />
+          </div>
+          <div class="sm:col-span-2">
+            <label class="label">Số ca tập cần xếp/tuần</label>
+            <input class="input" id="aMaxSessions" type="number" min="1" max="14" value="3" required />
+          </div>
         </div>
         <button type="submit" class="btn btn-primary self-start">${icon('plus')} Thêm tiết mục</button>
       </form>
@@ -833,35 +1142,75 @@
   }
 
   function adminBuilderHTML() {
-    const slots = activeSlots();
     return `
     <div class="stack gap-4">
-      <div class="row justify-between gap-2">
-        <h3 class="text-sm font-semibold">Phân công lịch tập thủ công hoặc tự động</h3>
-        <button class="btn btn-sm btn-primary" data-action="auto-schedule">${icon('wand-2')} Tự động xếp lịch</button>
+      <div class="card p-3 bg-sky/5 border-sky/30 text-xs stack gap-1">
+        <span class="font-semibold text-sky">💡 Quy tắc Tự động xếp lịch:</span>
+        <span>1. <strong>Độ ưu tiên Tiết mục</strong>: Xếp tiết mục ưu tiên cao hơn trước.</span>
+        <span>2. <strong>Lịch rảnh Biên đạo</strong>: Ưu tiên chọn các ca trùng lịch rảnh của biên đạo.</span>
+        <span>3. <strong>Đặt số lượng ca tập</strong>: Tự dừng khi tiết mục đã đủ số ca/tuần quy định.</span>
+        <span>4. <strong>Tối ưu số bạn rảnh</strong>: Chọn ca có nhiều bạn rảnh nhất.</span>
       </div>
 
-      <form id="schedForm" class="stack gap-4 max-h-[400px] overflow-y-auto pr-1">
-        ${DAYS.map((day, di) => `
-          <div class="stack gap-2 border-b border-line pb-3">
+      <div class="row justify-between gap-2">
+        <h3 class="text-sm font-semibold">Phân chia lịch tập (Tối đa 2 tiết mục/khung giờ)</h3>
+        <button class="btn btn-sm btn-primary" data-action="auto-schedule">${icon('wand-2')} Tự động xếp lịch thông minh</button>
+      </div>
+
+      <form id="schedForm" class="stack gap-4 max-h-[460px] overflow-y-auto pr-1">
+        ${DAYS.map((day, di) => {
+          const slots = getDaySlots(di);
+          return `
+          <div class="stack gap-2 border-b border-line pb-4">
             <span class="text-xs font-semibold text-inksoft uppercase">${esc(day)}</span>
-            <div class="grid gap-2 sm:grid-cols-2">
+            <div class="grid gap-3 sm:grid-cols-2">
               ${slots.map((s) => {
                 const k = cellKey(di, s.id);
-                const cur = state.schedule[k] || {};
+                const items = getCellSchedule(k);
+                const act1 = items[0] || { actId: '', supervisor: '' };
+                const act2 = items[1] || { actId: '', supervisor: '' };
+
+                const conflict = checkConflict(act1.actId, act2.actId, di, s.id);
+
                 return `
-                <div class="p-2.5 border border-line rounded-ctl bg-canvas stack gap-1.5">
-                  <span class="text-[12px] font-medium">${esc(s.label)} (${esc(s.start)}-${esc(s.end)})</span>
-                  <select class="input text-xs" name="act_${k}">
-                    <option value="">-- Trống (Nghỉ) --</option>
-                    ${state.acts.map(a => `<option value="${a.id}" ${cur.actId === a.id ? 'selected' : ''}>${esc(a.name)}</option>`).join('')}
-                  </select>
-                  <input class="input text-xs" name="sup_${k}" placeholder="Người phụ trách" value="${esc(cur.supervisor || '')}" />
+                <div class="p-3 border ${conflict ? 'border-danger bg-danger/5' : 'border-line bg-canvas'} rounded-ctl stack gap-2">
+                  <div class="row justify-between items-center">
+                    <span class="text-[12px] font-semibold">${esc(s.label)}</span>
+                    ${conflict ? `<span class="badge bg-danger/10 text-danger text-[10px]" title="Trùng: ${conflict.map(m=>m.name).join(', ')}">⚠️ Đụng nhân sự (${conflict.length})</span>` : ''}
+                  </div>
+
+                  <!-- Tiết mục 1 -->
+                  <div class="stack gap-1">
+                    <span class="text-[11px] font-medium text-inksoft">Tiết mục 1:</span>
+                    <select class="input text-xs" name="act1_${k}">
+                      <option value="">-- Trống --</option>
+                      ${state.acts.map(a => {
+                        const count = freeMembers(di, s.id, a.id).length;
+                        const cFree = isChoreoFree(a, di, s.id) ? ' · BĐ Rảnh' : '';
+                        return `<option value="${a.id}" ${act1.actId === a.id ? 'selected' : ''}>[ƯU TIÊN ${a.priority || 1}] ${esc(a.name)} (${count} bạn rảnh${cFree})</option>`;
+                      }).join('')}
+                    </select>
+                    <input class="input text-xs" name="sup1_${k}" placeholder="Người phụ trách 1" value="${esc(act1.supervisor || '')}" />
+                  </div>
+
+                  <!-- Tiết mục 2 -->
+                  <div class="stack gap-1 border-t border-line/60 pt-1.5">
+                    <span class="text-[11px] font-medium text-inksoft">Tiết mục 2 (Tùy chọn):</span>
+                    <select class="input text-xs" name="act2_${k}">
+                      <option value="">-- Không xếp thêm --</option>
+                      ${state.acts.map(a => {
+                        const count = freeMembers(di, s.id, a.id).length;
+                        const cFree = isChoreoFree(a, di, s.id) ? ' · BĐ Rảnh' : '';
+                        return `<option value="${a.id}" ${act2.actId === a.id ? 'selected' : ''}>[ƯU TIÊN ${a.priority || 1}] ${esc(a.name)} (${count} bạn rảnh${cFree})</option>`;
+                      }).join('')}
+                    </select>
+                    <input class="input text-xs" name="sup2_${k}" placeholder="Người phụ trách 2" value="${esc(act2.supervisor || '')}" />
+                  </div>
                 </div>`;
               }).join('')}
             </div>
-          </div>
-        `).join('')}
+          </div>`;
+        }).join('')}
         <button type="submit" class="btn btn-primary self-start">${icon('save')} Lưu xếp lịch</button>
       </form>
     </div>`;
@@ -870,7 +1219,6 @@
   function adminSettingsHTML() {
     return `
     <div class="stack gap-5">
-      <!-- Đổi Tên Nhóm & Hạn Chót -->
       <form id="groupSettingsForm" class="stack gap-3 border-b border-line pb-4">
         <h3 class="text-sm font-semibold">Cấu hình nhóm & Hạn nộp</h3>
         <div>
@@ -888,7 +1236,6 @@
         <button type="submit" class="btn btn-primary self-start">${icon('save')} Cập nhật cấu hình</button>
       </form>
 
-      <!-- Đổi mã PIN -->
       <form id="changePinForm" class="stack gap-3 border-b border-line pb-4">
         <h3 class="text-sm font-semibold">Đổi mã PIN Quản trị</h3>
         <div class="grid gap-2 sm:grid-cols-2">
@@ -898,7 +1245,6 @@
         <button type="submit" class="btn btn-primary self-start">${icon('key')} Đổi PIN</button>
       </form>
 
-      <!-- Reset Dữ Liệu -->
       <div class="stack gap-2">
         <h3 class="text-sm font-semibold text-danger">Vùng nguy hiểm</h3>
         <button class="btn btn-danger self-start" data-action="reset-group">${icon('trash-2')} Reset toàn bộ dữ liệu nhóm</button>
@@ -940,8 +1286,9 @@
     else if (action === 'admin-sec') { ui.adminSection = btn.dataset.sec; renderAdmin(); }
     else if (action === 'copy-link') { copyShareLink(); }
     else if (action === 'new-group') { openNewGroup(); }
+    else if (action === 'export-excel') { exportExcel(); }
+    else if (action === 'import-excel') { el('importFile').click(); }
     else if (action === 'export-json') { exportJSON(); }
-    else if (action === 'import-json') { el('importFile').click(); }
     else if (action === 'export-csv') { exportCSV(); }
     else if (action === 'tab') { ui.tab = btn.dataset.tab; renderTabs(); renderView(); }
     else if (action === 'clear-grid') {
@@ -961,10 +1308,24 @@
       draft.availability[day] = arr;
       renderGrid();
     }
-    else if (action === 'del-slot') {
-      const id = btn.dataset.id;
-      state.slots = state.slots.filter(s => s.id !== id);
-      save(); renderAll(); toast('Đã xoá ca tập.');
+    else if (action === 'toggle-choreo-slot') {
+      const actId = btn.dataset.actid;
+      const day = parseInt(btn.dataset.day, 10);
+      const slot = btn.dataset.slot;
+
+      const act = actById(actId);
+      if (act) {
+        if (!act.choreoAvailability) act.choreoAvailability = {};
+        if (!act.choreoAvailability[day]) act.choreoAvailability[day] = [];
+
+        const arr = act.choreoAvailability[day];
+        const idx = arr.indexOf(slot);
+        if (idx >= 0) arr.splice(idx, 1);
+        else arr.push(slot);
+
+        save();
+        renderAdmin();
+      }
     }
     else if (action === 'del-act') {
       const id = btn.dataset.id;
@@ -979,16 +1340,24 @@
     else if (action === 'auto-schedule') {
       autoSchedule(true);
       renderAdmin();
+      renderView();
     }
     else if (action === 'reset-group') {
       resetGroup();
     }
   });
 
-  // Sự kiện thay đổi ô nhập Form
   document.addEventListener('change', (e) => {
     if (e.target.id === 'importFile' && e.target.files.length) {
-      importJSON(e.target.files[0]);
+      const file = e.target.files[0];
+      const fn = file.name.toLowerCase();
+      if (fn.endsWith('.xlsx') || fn.endsWith('.xls')) {
+        importExcel(file);
+      } else if (fn.endsWith('.json')) {
+        importJSON(file);
+      } else {
+        toast('Vui lòng chọn file .xlsx, .xls hoặc .json', 'warn');
+      }
       e.target.value = '';
     }
     if (e.target.classList.contains('act-checkbox')) {
@@ -1008,7 +1377,6 @@
     if (e.target.id === 'fApprentice') draft.apprentice = e.target.checked;
   });
 
-  // Sự kiện Submit các Forms
   document.addEventListener('submit', (e) => {
     e.preventDefault();
     const id = e.target.id;
@@ -1034,38 +1402,60 @@
       draft = blankDraft();
       renderAll();
     }
-    else if (id === 'slotForm') {
-      const label = el('sLabel').value.trim();
-      const start = el('sStart').value;
-      const end = el('sEnd').value;
-      if (label && start && end) {
-        state.slots.push({ id: uid(), label, start, end, active: true });
-        save(); renderAdmin(); renderView();
-        toast('Đã thêm ca tập.');
-      }
-    }
     else if (id === 'actForm') {
       const name = el('aName').value.trim();
       const target = parseInt(el('aTarget').value, 10) || 1;
       const choreographer = el('aChoreo').value.trim();
+      const priority = parseInt(el('aPriority').value, 10) || 1;
+      const maxSessions = parseInt(el('aMaxSessions').value, 10) || 3;
+
       if (name) {
-        state.acts.push({ id: uid(), name, target, choreographer });
+        state.acts.push({
+          id: uid(),
+          name,
+          target,
+          choreographer,
+          priority,
+          maxSessions,
+          choreoAvailability: {}
+        });
         save(); renderAdmin(); renderView();
         toast('Đã thêm tiết mục.');
       }
     }
     else if (id === 'schedForm') {
       const form = e.target;
+      let hasConflictFound = false;
+
       DAYS.forEach((_, di) => {
-        activeSlots().forEach(s => {
+        getDaySlots(di).forEach(s => {
           const k = cellKey(di, s.id);
-          const actId = form[`act_${k}`].value;
-          const supervisor = form[`sup_${k}`].value;
-          if (actId) state.schedule[k] = { actId, supervisor };
+          const act1Id = form[`act1_${k}`].value;
+          const sup1 = form[`sup1_${k}`].value.trim();
+          const act2Id = form[`act2_${k}`].value;
+          const sup2 = form[`sup2_${k}`].value.trim();
+
+          const list = [];
+          if (act1Id) list.push({ actId: act1Id, supervisor: sup1 });
+          if (act2Id && act2Id !== act1Id) list.push({ actId: act2Id, supervisor: sup2 });
+
+          if (act1Id && act2Id && checkConflict(act1Id, act2Id, di, s.id)) {
+            hasConflictFound = true;
+          }
+
+          if (list.length) state.schedule[k] = list;
           else delete state.schedule[k];
         });
       });
-      save(); toast(MSG.saved);
+      save();
+      renderView();
+      renderAdmin();
+
+      if (hasConflictFound) {
+        toast('Đã lưu lịch nhưng có ca bị trùng nhân sự! Vui lòng kiểm tra lại.', 'warn');
+      } else {
+        toast(MSG.saved);
+      }
     }
     else if (id === 'groupSettingsForm') {
       state.groupName = el('gNameInp').value.trim() || state.groupName;
